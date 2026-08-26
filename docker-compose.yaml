@@ -1,0 +1,83 @@
+services:
+  database_pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: database_pgvector
+    environment:
+      POSTGRES_DB: chathistory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chathistory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  embedding_service:
+    build:
+      context: ./Embedding_Service
+      dockerfile: Dockerfile
+    container_name: embedding_service
+    environment:
+      - DB_HOST=database_pgvector
+      - DB_PORT=5432
+      - DB_NAME=chathistory
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - PDF_DIR=/app/Raw_Content
+    volumes:
+      - ./Document_Upload_Service/Raw_Content:/app/Raw_Content
+      - hf_cache:/root/.cache/huggingface
+    ports:
+      - "8001:8001"
+    depends_on:
+      database_pgvector:
+        condition: service_healthy
+
+  doc_upload_service:
+    build:
+      context: ./Document_Upload_Service
+      dockerfile: Dockerfile
+    container_name: doc_upload_service
+    ports:
+      - "8002:8002"
+    environment:
+      DB_HOST: database_pgvector
+      DB_PORT: 5432
+      DB_NAME: chathistory
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      EMBEDDING_SERVICE_URL: http://embedding_service:8001/embed
+      PDF_DIR: /app/Raw_Content
+    volumes:
+      - ./Document_Upload_Service/Raw_Content:/app/Raw_Content
+    depends_on:
+      database_pgvector:
+        condition: service_healthy
+      embedding_service:
+        condition: service_started
+
+  db_api:
+    build:
+      context: ./Database_Service
+      dockerfile: Dockerfile
+    container_name: database_api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: database_pgvector
+      DB_PORT: 5432
+      DB_NAME: chathistory
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+    depends_on:
+      database_pgvector:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  hf_cache:
