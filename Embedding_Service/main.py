@@ -1,5 +1,6 @@
 import os
 import torch
+from typing import List, Union, Optional
 from fastapi import FastAPI, HTTPException
 from sentence_transformers import SentenceTransformer
 from Schemas import EmbeddingRequest, EmbeddingResponse

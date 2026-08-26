@@ -1,0 +1,6 @@
+torch==2.2.2
+sentence-transformers==2.6.1
+pypdf==4.1.0
+langchain-text-splitters==0.0.1
+pandas==2.2.1
+pyarrow==15.0.2
