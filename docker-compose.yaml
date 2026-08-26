@@ -17,30 +17,15 @@ services:
       retries: 5
 
   embedding_service:
-    build:
-      context: ./Embedding_Service
-      dockerfile: Dockerfile
+    build: ./Embedding_Service
     container_name: embedding_service
-    environment:
-      - DB_HOST=database_pgvector
-      - DB_PORT=5432
-      - DB_NAME=chathistory
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - PDF_DIR=/app/Raw_Content
-    volumes:
-      - ./Document_Upload_Service/Raw_Content:/app/Raw_Content
-      - hf_cache:/root/.cache/huggingface
     ports:
       - "8001:8001"
-    depends_on:
-      database_pgvector:
-        condition: service_healthy
+    volumes:
+      - hf_cache:/root/.cache/huggingface
 
   doc_upload_service:
-    build:
-      context: ./Document_Upload_Service
-      dockerfile: Dockerfile
+    build: ./Document_Upload_Service
     container_name: doc_upload_service
     ports:
       - "8002:8002"
@@ -61,11 +46,8 @@ services:
         condition: service_started
 
   db_api:
-    build:
-      context: ./Database_Service
-      dockerfile: Dockerfile
+    build: ./Database_Service
     container_name: database_api
-    restart: always
     ports:
       - "8000:8000"
     environment:

@@ -2,8 +2,8 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
+from Schemas import MessageCreate, ChunkInsert, SimilarityQuery
 
 app = FastAPI(title="Database Microservice")
 
@@ -26,24 +26,6 @@ def get_db_connection():
 def health():
     return {"status": "healthy"}
 
-# --- Models ---
-class MessageCreate(BaseModel):
-    conv_id: str
-    role: str
-    message: str
-
-class ChunkInsert(BaseModel):
-    document_id: str
-    chunk_index: int
-    content: str
-    embedding: List[float]
-    metadata: Optional[Dict[str, Any]] = {}
-
-class SimilarityQuery(BaseModel):
-    query_embedding: List[float]
-    top_k: int = 5
-
-# --- History Endpoints ---
 @app.post("/history/add")
 def add_message(payload: MessageCreate):
     try:
@@ -62,7 +44,6 @@ def add_message(payload: MessageCreate):
 
 @app.get("/history/all", response_model=List[Dict[str, Any]])
 def get_all_history():
-    """Reads all rows from the conversation_history table."""
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -90,7 +71,6 @@ def get_history(conv_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Vector & RAG Endpoints ---
 @app.post("/rag/chunks/add")
 def add_chunk(payload: ChunkInsert):
     try:
@@ -112,23 +92,19 @@ def add_chunk(payload: ChunkInsert):
 
 @app.get("/rag/chunks/all", response_model=List[Dict[str, Any]])
 def get_all_chunks():
-    """Reads all rows safely from document_chunks matching your exact DB schema."""
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        
         cur.execute("SELECT * FROM document_chunks ORDER BY id ASC;")
         chunks = cur.fetchall()
         cur.close()
         conn.close()
-        
         return [dict(row) for row in chunks]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/rag/search", response_model=List[Dict[str, Any]])
 def search_similar_chunks(payload: SimilarityQuery):
-    """Performs similarity search and returns matching rows as a list of dicts."""
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)

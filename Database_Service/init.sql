@@ -1,7 +1,6 @@
 -- Enable vector search extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- 1. Conversation History Table
 CREATE TABLE IF NOT EXISTS conversation_history (
     id SERIAL PRIMARY KEY,
     conv_id VARCHAR(255) NOT NULL,
@@ -12,7 +11,6 @@ CREATE TABLE IF NOT EXISTS conversation_history (
 
 CREATE INDEX IF NOT EXISTS idx_conv_id ON conversation_history(conv_id);
 
--- 2. Document Chunks (RAG Vector Store)
 CREATE TABLE IF NOT EXISTS document_chunks (
     id SERIAL PRIMARY KEY,
     document_id VARCHAR(255) NOT NULL,
@@ -23,10 +21,8 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Safely add column if the table existed previously without it
 ALTER TABLE document_chunks 
 ADD COLUMN IF NOT EXISTS embedding vector(1024);
 
--- Fast HNSW cosine similarity vector index
 CREATE INDEX IF NOT EXISTS idx_document_embeddings 
 ON document_chunks USING hnsw (embedding vector_cosine_ops);
