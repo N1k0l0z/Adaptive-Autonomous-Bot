@@ -1,3 +1,6 @@
 .pytest_cache
 aab_venv
-__pycache__Document_Upload_Service/Raw_Content/
+__pycache__
+Document_Upload_Service/Raw_Content/
+test.ipynb
+master_chunks.parquet
