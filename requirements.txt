@@ -3,3 +3,9 @@ pypdf
 langchain-text-splitters
 psycopg2-binary
 beautifulsoup4
+"psycopg[binary]"
+pgvector
+pyarrow
+pandas
+tqdm
+python-dotenv

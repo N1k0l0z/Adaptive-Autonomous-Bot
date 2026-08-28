@@ -1,8 +1,10 @@
 fastapi==0.110.0
 uvicorn==0.28.0
-sentence-transformers==2.6.1
 pydantic==2.6.4
-torch==2.2.2
 psycopg2-binary==2.9.9
 pypdf==4.1.0
 langchain-text-splitters==0.0.1
+numpy<2.0.0
+torch>=2.6.0
+transformers>=4.49.0
+sentence-transformers>=3.4.0

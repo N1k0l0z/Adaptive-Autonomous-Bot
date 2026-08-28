@@ -7,13 +7,13 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-DB_HOST = os.getenv("DB_HOST", "database_pgvector")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "chathistory")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
-PDF_DIR = os.getenv("PDF_DIR", "/app/Raw_Content")
-EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding_service:8001/embed")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+PDF_DIR = os.getenv("PDF_DIR")
+EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL")
 
 BATCH_SIZE = 128
 

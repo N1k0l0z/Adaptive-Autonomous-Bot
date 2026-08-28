@@ -4,3 +4,5 @@ __pycache__
 Document_Upload_Service/Raw_Content/
 test.ipynb
 master_chunks.parquet
+.env
+gcp-key.json

@@ -3,15 +3,15 @@ services:
     image: pgvector/pgvector:pg16
     container_name: database_pgvector
     environment:
-      POSTGRES_DB: chathistory
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d chathistory"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -32,9 +32,9 @@ services:
     environment:
       DB_HOST: database_pgvector
       DB_PORT: 5432
-      DB_NAME: chathistory
-      DB_USER: postgres
-      DB_PASSWORD: postgres
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
       EMBEDDING_SERVICE_URL: http://embedding_service:8001/embed
       PDF_DIR: /app/Raw_Content
     volumes:
@@ -52,13 +52,29 @@ services:
       - "8000:8000"
     environment:
       DB_HOST: database_pgvector
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
       DB_PORT: 5432
-      DB_NAME: chathistory
-      DB_USER: postgres
-      DB_PASSWORD: postgres
     depends_on:
       database_pgvector:
         condition: service_healthy
+
+  graph_service:
+    build: ./Graph_Service
+    container_name: graph_service
+    ports:
+      - "8003:8003"
+    environment:
+      DATABASE_SERVICE_URL: http://database_api:8000
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+    volumes:
+      - ./Graph_Service:/app
+    depends_on:
+      db_api:
+        condition: service_started
 
 volumes:
   postgres_data:
