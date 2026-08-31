@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   database_pgvector:
     image: pgvector/pgvector:pg16
@@ -10,8 +12,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./Database_Service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -23,6 +26,12 @@ services:
       - "8001:8001"
     volumes:
       - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
 
   doc_upload_service:
     build: ./Document_Upload_Service
@@ -35,7 +44,7 @@ services:
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
-      EMBEDDING_SERVICE_URL: http://embedding_service:8001/embed
+      EMBEDDING_SERVICE_URL: http://embedding_service:8001
       PDF_DIR: /app/Raw_Content
     volumes:
       - ./Document_Upload_Service/Raw_Content:/app/Raw_Content
@@ -43,7 +52,7 @@ services:
       database_pgvector:
         condition: service_healthy
       embedding_service:
-        condition: service_started
+        condition: service_healthy
 
   db_api:
     build: ./Database_Service
@@ -54,6 +63,7 @@ services:
       DB_HOST: database_pgvector
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_PORT: 5432
     depends_on:
@@ -66,15 +76,32 @@ services:
     ports:
       - "8003:8003"
     environment:
-      DATABASE_SERVICE_URL: http://database_api:8000
-      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
-      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+      - PYTHONPATH=/app:/app/app
+      - DATABASE_SERVICE_URL=http://database_api:8000
+      - EMBEDDING_SERVICE_URL=http://embedding_service:8001
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+      - DB_SERVICE_URL=http://db_service:8000
+      - EMBEDDING_SERVICE_URL=http://embedding_service:8001
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - ./Graph_Service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
     depends_on:
-      db_api:
-        condition: service_started
+      - db_api
+      - embedding_service
+
+  ui_service:
+    image: nginx:alpine
+    container_name: ui_service
+    ports:
+      - "8090:80"
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+    restart: always
+    depends_on:
+      - graph_service
 
 volumes:
   postgres_data:

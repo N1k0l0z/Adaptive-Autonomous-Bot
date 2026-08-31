@@ -3,6 +3,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 from fastapi import FastAPI, HTTPException
 from typing import List, Optional, Dict, Any
+from datetime import date, datetime
 from Schemas import MessageCreate, ChunkInsert, SimilarityQuery
 
 
@@ -56,10 +57,9 @@ def get_all_history():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from typing import Optional
-
 @app.get("/history/{conv_id}")
 def get_history(conv_id: str, limit: Optional[int] = None):
+    conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -68,13 +68,13 @@ def get_history(conv_id: str, limit: Optional[int] = None):
             query = """
                 SELECT conv_id, role, message, created_at 
                 FROM (
-                    SELECT conv_id, role, message, created_at 
+                    SELECT id, conv_id, role, message, created_at 
                     FROM conversation_history 
                     WHERE conv_id = %s 
-                    ORDER BY created_at DESC 
+                    ORDER BY id DESC 
                     LIMIT %s
                 ) sub
-                ORDER BY created_at ASC;
+                ORDER BY id ASC;
             """
             cur.execute(query, (conv_id, limit))
         else:
@@ -82,16 +82,28 @@ def get_history(conv_id: str, limit: Optional[int] = None):
                 SELECT conv_id, role, message, created_at 
                 FROM conversation_history 
                 WHERE conv_id = %s 
-                ORDER BY created_at ASC;
+                ORDER BY id ASC;
             """
             cur.execute(query, (conv_id,))
             
-        history = cur.fetchall()
+        raw_history = cur.fetchall()
         cur.close()
-        conn.close()
-        return {"conv_id": conv_id, "messages": history}
+
+        # Convert RealDictRow to dict and format datetime -> ISO string
+        formatted_messages = []
+        for row in raw_history:
+            msg = dict(row)
+            if isinstance(msg.get("created_at"), (datetime, date)):
+                msg["created_at"] = msg["created_at"].isoformat()
+            formatted_messages.append(msg)
+
+        return {"status": "success", "conv_id": conv_id, "messages": formatted_messages}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
 
 @app.post("/rag/chunks/add")
 def add_chunk(payload: ChunkInsert):

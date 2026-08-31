@@ -4,6 +4,7 @@ import requests
 import psycopg2
 from psycopg2.extras import execute_values
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from datetime import date, datetime
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
