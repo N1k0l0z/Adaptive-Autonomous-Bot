@@ -24,12 +24,6 @@ app.add_middleware(
 )
 
 
-@app.get("/history/{conv_id}", response_model=HistoryResponse)
-def get_history(conv_id: str, limit: int = 50):
-    records = fetch_conversation_history(conv_id=conv_id, limit=limit)
-    return {"conv_id": conv_id, "messages": records}
-
-
 @app.post("/process", response_model=ProcessQueryResponse)
 def process_query(payload: ProcessQueryRequest):
     raw_question = payload.question
@@ -72,13 +66,20 @@ def process_query(payload: ProcessQueryRequest):
     clarification_reasoning = final_state.get("clarification_reasoning")
 
     dag_nodes = blueprint.get("nodes", [])
-    edges = [e for e in blueprint.get("edges", []) if e.get("source") != e.get("target")]
+    
+    # Normalize edges whether they arrive as dicts or Pydantic models
+    raw_edges = blueprint.get("edges", [])
+    edges = []
+    for e in raw_edges:
+        e_dict = e.model_dump() if hasattr(e, "model_dump") else e
+        if e_dict.get("source") != e_dict.get("target"):
+            edges.append(e_dict)
 
     evaluator_entries: List[Dict[str, Any]] = []
     for ev in evaluation_logs:
         evaluator_entries.append(
             {
-                "id": f"evaluator_iter_{ev.get('iteration', len(evaluator_entries))}",
+                "id": f"evaluator_iter_{ev.get('iteration', len(evaluator_entries) + 1)}",
                 "node_type": "evaluator_agent",
                 "step_description": (
                     "Judge whether the synthesized answer covers every sub-question, "
@@ -100,7 +101,11 @@ def process_query(payload: ProcessQueryRequest):
     full_trace: List[Dict[str, Any]] = []
     if planner_trace:
         full_trace.append(planner_trace)
-    full_trace.extend(dag_nodes)
+    
+    # Normalize node items
+    for n in dag_nodes:
+        full_trace.append(n.model_dump() if hasattr(n, "model_dump") else n)
+        
     full_trace.extend(evaluator_entries)
 
     for n in full_trace:
@@ -112,6 +117,7 @@ def process_query(payload: ProcessQueryRequest):
     }
     retrieved_chunks: List[Dict[str, Any]] = []
     execution_trace: List[Dict[str, Any]] = []
+    
     for n in full_trace:
         node_type = n.get("node_type") or n.get("assigned_agent")
         if node_type == "planner_agent":

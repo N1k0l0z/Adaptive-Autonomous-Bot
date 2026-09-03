@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from pydantic import BaseModel, Field
 
 
-class GraphState(TypedDict):
+class GraphState(TypedDict, total=False):
     question: str
     conv_id: str
     run_id: str
@@ -13,9 +13,10 @@ class GraphState(TypedDict):
     evaluation_logs: List[Dict[str, Any]]
     iteration_count: int
     final_answer: str
-    status: str  # PROCESSING | EXECUTING | CLARIFICATION_NEEDED | NEEDS_REVISION | APPROVED
+    status: str
     clarification_question: Optional[str]
     clarification_reasoning: Optional[str]
+    execution_timeline: List[Dict[str, Any]]  # Append-only chronological trace
 
 
 class ProcessQueryRequest(BaseModel):

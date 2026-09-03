@@ -10,52 +10,49 @@ from app.PromptSchema import get_evaluator_prompts, get_planner_prompts
 from app.schemas import GraphState
 from app.services import fetch_conversation_history, perform_vector_search
 from app.ToolsSchema import AutonomousExecutionBlueprint, EvaluatorDecision
+from utils import format_history_for_planner_prompt, parse_raw_conversation_history
 
 MAX_REVISION_ITERATIONS = 2
 
 
-def execute_vector_search_agent(
-    query: str, top_k: int = 5
-) -> List[Dict[str, Any]]:
+def execute_vector_search_agent(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
     raw_results = perform_vector_search(query=query, top_k=top_k)
-    return [
-        {
+    formatted_chunks = []
+    for idx, c in enumerate(raw_results):
+        formatted_chunks.append({
             "chunk_id": c.get("id") or c.get("chunk_id") or idx + 1,
             "content": c.get("content", ""),
             "metadata": c.get("metadata", {}),
-        }
-        for idx, c in enumerate(raw_results)
-    ]
+        })
+    return formatted_chunks
 
 
 def resolve_prompt_template(template: str, node_outputs: Dict[str, Any]) -> str:
     resolved = template
-    for prev_id, prev_output in node_outputs.items():
-        placeholder = f"{{{prev_id}}}"
-        if placeholder not in resolved:
+    for node_id, output in node_outputs.items():
+        key = f"{{{node_id}}}"
+        if key not in resolved:
             continue
-        if isinstance(prev_output, list):
-            chunk_str_list = []
-            for c in prev_output:
+
+        if isinstance(output, list):
+            chunk_strings = []
+            for c in output:
                 if isinstance(c, dict) and "chunk_id" in c:
-                    chunk_str_list.append(
+                    chunk_strings.append(
                         f"Chunk [{c.get('chunk_id', 'N/A')}]:\n{c.get('content', '')}"
                     )
                 else:
-                    chunk_str_list.append(str(c))
-            resolved = resolved.replace(
-                placeholder, "\n\n".join(chunk_str_list)
-            )
+                    chunk_strings.append(str(c))
+            rendered = "\n\n".join(chunk_strings)
         else:
-            resolved = resolved.replace(placeholder, str(prev_output))
+            rendered = str(output)
+            
+        resolved = resolved.replace(key, rendered)
     return resolved
 
 
 def run_llm_prompt(prompt: str) -> str:
-    response = client.models.generate_content(
-        model=MODEL_NAME, contents=prompt
-    )
-    return response.text
+    return client.models.generate_content(model=MODEL_NAME, contents=prompt).text
 
 
 def _execute_task_node(
@@ -71,14 +68,12 @@ def _execute_task_node(
         if node_type in ("vector_search", "search_rag"):
             query = node.get("search_query") or raw_question
             top_k = node.get("top_k") or 5
-            chunks = execute_vector_search_agent(query=query, top_k=top_k)
-            node["runtime_output"] = chunks
+            node["runtime_output"] = execute_vector_search_agent(query=query, top_k=top_k)
             node["status"] = "EXECUTED"
 
         elif node_type == "fetch_history":
             limit = node.get("fetch_history_limit") or 5
-            hist = fetch_conversation_history(conv_id=conv_id, limit=limit)
-            node["runtime_output"] = hist
+            node["runtime_output"] = fetch_conversation_history(conv_id=conv_id, limit=limit)
             node["status"] = "EXECUTED"
 
         elif node_type == "clarify_user_intent":
@@ -87,27 +82,17 @@ def _execute_task_node(
             node["status"] = "EXECUTED"
 
         elif node.get("prompt_template"):
-            resolved = resolve_prompt_template(
-                node["prompt_template"], node_outputs
-            )
-            text = run_llm_prompt(resolved)
+            resolved = resolve_prompt_template(node["prompt_template"], node_outputs)
             node["resolved_prompt"] = resolved
-            node["runtime_output"] = text
+            node["runtime_output"] = run_llm_prompt(resolved)
             node["status"] = "EXECUTED"
-            if (
-                node_type == "plan_validation"
-                and node.get("validation_criteria")
-            ):
-                node["reasoning"] = (
-                    f"Validated against: {node['validation_criteria']}"
-                )
+            if node_type == "plan_validation" and node.get("validation_criteria"):
+                node["reasoning"] = f"Validated against: {node['validation_criteria']}"
 
         else:
             node["status"] = "SKIPPED_UNKNOWN_TYPE"
             node["runtime_output"] = None
-            node["reasoning"] = (
-                f"No handler for node_type '{node_type}' and no prompt_template to fall back on."
-            )
+            node["reasoning"] = f"No handler for node_type '{node_type}' and no prompt_template."
 
     except Exception as e:
         node["status"] = "FAILED"
@@ -115,113 +100,84 @@ def _execute_task_node(
         node["runtime_output"] = None
 
     finished = time.time()
-    node["started_at"] = started
-    node["finished_at"] = finished
-    node["duration_seconds"] = round(finished - started, 3)
+    node.update({
+        "started_at": started,
+        "finished_at": finished,
+        "duration_seconds": round(finished - started, 3),
+    })
     return node
 
 
 def planner_agent_node(state: GraphState) -> Dict[str, Any]:
-    raw_question = state["question"]
-    history = state.get("chat_history", [])
+    question = state["question"]
+    raw_history = state.get("chat_history", [])
 
-    system_instruction, user_prompt = get_planner_prompts(raw_question, history)
+    parsed_history = parse_raw_conversation_history(raw_history)
+    formatted_history = format_history_for_planner_prompt(parsed_history)
 
+    sys_instruction, user_prompt = get_planner_prompts(state, formatted_history)
+
+    is_revision = state.get("status") == "NEEDS_REVISION"
+    current_iteration = state.get("iteration_count", 0)
     started = time.time()
-    raw_response_text = None
-    error = None
 
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=user_prompt,
-            config={
-                "system_instruction": system_instruction,
-                "response_mime_type": "application/json",
-                "response_schema": AutonomousExecutionBlueprint,
-            },
-        )
-        raw_response_text = response.text
-        blueprint = json.loads(response.text)
-        planner_status = "EXECUTED"
-    except Exception as e:
-        error = str(e)
-        planner_status = "FALLBACK_USED"
-        blueprint = {
-            "clarification_reasoning": None,
-            "nodes": [
-                {
-                    "id": "node_1",
-                    "node_type": "vector_search",
-                    "search_query": raw_question,
-                    "top_k": 5,
-                },
-                {
-                    "id": "node_2",
-                    "node_type": "synthesis",
-                    "prompt_template": f"Answer the question using this context: {{node_1}}. Question: {raw_question}",
-                },
-            ],
-            "edges": [{"source": "node_1", "target": "node_2"}],
-        }
-
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=user_prompt,
+        config={
+            "system_instruction": sys_instruction,
+            "response_mime_type": "application/json",
+            "response_schema": AutonomousExecutionBlueprint,
+        },
+    )
+    raw_response_text = response.text
+    blueprint = json.loads(raw_response_text)
     finished = time.time()
 
     nodes = blueprint.get("nodes", [])
     for idx, n in enumerate(nodes):
-        n.setdefault("id", f"node_{idx + 1}")
+        prefix = f"rev{current_iteration}_" if is_revision else ""
+        if not n.get("id") or (is_revision and not n["id"].startswith("rev")):
+            n["id"] = f"{prefix}node_{idx + 1}"
         n.setdefault("status", "PENDING")
+
     blueprint["nodes"] = nodes
     blueprint.setdefault("edges", [])
 
     planner_trace = {
-        "id": "planner",
+        "id": f"planner_rev_{current_iteration}" if is_revision else "planner_initial",
         "assigned_agent": "planner_agent",
-        "step_description": "Contextualize/decompose the question against chat history and design a parallel-execution DAG",
-        "input": {
-            "question": raw_question,
-            "history_turns_considered": len(history[-5:]),
-        },
-        "prompt_used": user_prompt,
-        "system_instruction": system_instruction,
-        "status": planner_status,
-        "runtime_output": (
-            raw_response_text
-            if raw_response_text is not None
-            else {"error": error, "fallback_used": True}
+        "step_description": (
+            "Re-plan using Evaluator's proposed structural changes"
+            if is_revision
+            else "Contextualize/decompose the question against chat history and design a parallel-execution DAG"
         ),
-        "error": error,
+        "input": {"question": question, "history_turns_considered": len(parsed_history)},
+        "prompt_used": user_prompt,
+        "system_instruction": sys_instruction,
+        "status": "EXECUTED",
+        "runtime_output": raw_response_text,
+        "error": None,
         "started_at": started,
         "finished_at": finished,
         "duration_seconds": round(finished - started, 3),
     }
 
-    clarification_reasoning = blueprint.get("clarification_reasoning")
-    clarify_node = next(
-        (n for n in nodes if n.get("node_type") == "clarify_user_intent"), None
-    )
-
-    if clarify_node or clarification_reasoning:
-        q_to_ask = (
-            (clarify_node.get("question_to_ask") if clarify_node else None)
-            or clarification_reasoning
-        )
-        return {
-            "blueprint": blueprint,
-            "planner_trace": planner_trace,
-            "status": "CLARIFICATION_NEEDED",
-            "clarification_question": (
-                clarify_node.get("question_to_ask") if clarify_node else None
-            ),
-            "clarification_reasoning": clarification_reasoning
-            or (clarify_node.get("question_to_ask") if clarify_node else None),
-            "final_answer": q_to_ask,
-        }
+    timeline = list(state.get("execution_timeline") or [])
+    timeline.append({
+        "step": len(timeline) + 1,
+        "phase": f"REPLANNING_ITERATION_{current_iteration}" if is_revision else "INITIAL_PLANNING",
+        "agent": "PlannerAgent",
+        "prompt_used": user_prompt,
+        "output_blueprint": blueprint,
+        "duration_seconds": round(finished - started, 3),
+    })
 
     return {
         "blueprint": blueprint,
         "planner_trace": planner_trace,
         "status": "EXECUTING",
+        "execution_timeline": timeline,
     }
 
 
@@ -229,61 +185,67 @@ def executor_agent_node(state: GraphState) -> Dict[str, Any]:
     blueprint = state.get("blueprint") or {}
     nodes = blueprint.get("nodes", [])
     edges = blueprint.get("edges", [])
-    node_outputs = dict(state.get("node_outputs", {}))
+    node_outputs = dict(state.get("node_outputs") or {})
     raw_question = state["question"]
     conv_id = state["conv_id"]
 
     nodes_by_id = {n["id"]: n for n in nodes}
-    deps: Dict[str, set] = {nid: set() for nid in nodes_by_id}
-    for e in edges:
-        src, tgt = e.get("source"), e.get("target")
-        if src == tgt:
-            continue
-        if tgt in deps and src in nodes_by_id:
-            deps[tgt].add(src)
 
-    executed = {
-        nid for nid, n in nodes_by_id.items() if n.get("status") == "EXECUTED"
-    }
+    deps = {}
+    for n_id in nodes_by_id:
+        source_ids = set()
+        for e in edges:
+            src = e.get("source") if isinstance(e, dict) else getattr(e, "source", None)
+            tgt = e.get("target") if isinstance(e, dict) else getattr(e, "target", None)
+            if tgt == n_id and src in nodes_by_id and src != n_id:
+                source_ids.add(src)
+        deps[n_id] = source_ids
+
+    executed = set()
+    for n_id, n in nodes_by_id.items():
+        if n.get("status") == "EXECUTED":
+            executed.add(n_id)
+
     remaining = set(nodes_by_id) - executed
 
     while remaining:
-        ready = [nid for nid in remaining if deps[nid].issubset(executed)]
+        ready = [n_id for n_id in remaining if deps[n_id].issubset(executed)]
+
         if not ready:
-            for nid in remaining:
-                nodes_by_id[nid]["status"] = "SKIPPED_UNRESOLVED_DEPENDENCY"
+            for n_id in remaining:
+                nodes_by_id[n_id]["status"] = "SKIPPED_UNRESOLVED_DEPENDENCY"
             break
 
         with ThreadPoolExecutor(max_workers=max(len(ready), 1)) as pool:
             futures = {
                 pool.submit(
                     _execute_task_node,
-                    nodes_by_id[nid],
+                    nodes_by_id[n_id],
                     dict(node_outputs),
                     raw_question,
                     conv_id,
-                ): nid
-                for nid in ready
+                ): n_id
+                for n_id in ready
             }
+
             for fut in as_completed(futures):
-                nid = futures[fut]
-                result_node = fut.result()
-                node_outputs[nid] = result_node.get("runtime_output")
+                n_id = futures[fut]
+                res = fut.result()
+                nodes_by_id[n_id] = res
+                node_outputs[n_id] = res.get("runtime_output")
 
         executed.update(ready)
         remaining -= set(ready)
 
     nodes_ordered = list(nodes_by_id.values())
 
-    synthesis_like = [
-        n
-        for n in nodes_ordered
-        if n.get("status") == "EXECUTED"
-        and n.get("prompt_template")
-        and n.get("node_type") != "plan_validation"
+    synthesis_nodes = [
+        n for n in nodes_ordered
+        if n.get("status") == "EXECUTED" and n.get("prompt_template") and n.get("node_type") != "plan_validation"
     ]
-    if synthesis_like:
-        final_ans = synthesis_like[-1].get("runtime_output", "")
+
+    if synthesis_nodes:
+        final_ans = synthesis_nodes[-1].get("runtime_output", "")
     elif nodes_ordered:
         final_ans = nodes_ordered[-1].get("runtime_output", "")
     else:
@@ -292,129 +254,118 @@ def executor_agent_node(state: GraphState) -> Dict[str, Any]:
     if isinstance(final_ans, list):
         final_ans = str(final_ans)
 
+    timeline = list(state.get("execution_timeline") or [])
+    iteration = state.get("iteration_count", 0)
+    timeline.append({
+        "step": len(timeline) + 1,
+        "phase": f"DAG_EXECUTION_ITERATION_{iteration}",
+        "agent": "ExecutorAgent",
+        "executed_nodes": nodes_ordered,
+        "synthesis_output": final_ans,
+    })
+
     return {
         "blueprint": {**blueprint, "nodes": nodes_ordered},
         "node_outputs": node_outputs,
-        "final_answer": final_ans or "",
+        "final_answer": final_ans,
         "status": "EXECUTING",
+        "execution_timeline": timeline,
     }
 
 
 def evaluator_agent_node(state: GraphState) -> Dict[str, Any]:
-    blueprint = state.get("blueprint") or {}
-    nodes = blueprint.get("nodes", [])
-    final_answer = state.get("final_answer", "")
-    iteration = state.get("iteration_count", 0)
-    logs = list(state.get("evaluation_logs", []))
-    raw_question = state["question"]
+    raw_history = state.get("chat_history", [])
+    parsed_history = parse_raw_conversation_history(raw_history)
+    formatted_history = format_history_for_planner_prompt(parsed_history)
 
-    sub_questions = [
-        n.get("search_query")
-        for n in nodes
-        if n.get("node_type") in ("vector_search", "search_rag")
-        and n.get("search_query")
-    ]
-
-    if iteration >= MAX_REVISION_ITERATIONS:
-        now = time.time()
-        logs.append(
-            {
-                "iteration": iteration,
-                "action": "APPROVE",
-                "is_sufficient": True,
-                "reasoning": f"Max revision iterations ({MAX_REVISION_ITERATIONS}) reached — auto-approved without a model call.",
-                "prompt_used": None,
-                "started_at": now,
-                "finished_at": now,
-                "duration_seconds": 0.0,
-            }
-        )
-        return {"status": "APPROVED", "evaluation_logs": logs}
-
-    eval_system, eval_prompt = get_evaluator_prompts(
-        question=raw_question,
-        sub_questions=sub_questions,
-        final_answer=final_answer,
-    )
+    sys_instruction, user_prompt = get_evaluator_prompts(state, formatted_history)
 
     started = time.time()
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=eval_prompt,
-            config={
-                "system_instruction": eval_system,
-                "response_mime_type": "application/json",
-                "response_schema": EvaluatorDecision,
-            },
-        )
-        decision = json.loads(response.text)
-        action = decision.get("action", "APPROVE")
-    except Exception as e:
-        decision = {
-            "action": "APPROVE",
-            "is_sufficient": True,
-            "reasoning": f"Evaluation call failed, auto-approved: {str(e)}",
-        }
-        action = "APPROVE"
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=user_prompt,
+        config={
+            "system_instruction": sys_instruction,
+            "response_mime_type": "application/json",
+            "response_schema": EvaluatorDecision,
+        },
+    )
+    raw_response_text = response.text
+    decision = json.loads(raw_response_text)
     finished = time.time()
 
-    logs.append(
-        {
-            "iteration": iteration,
-            "action": action,
-            "is_sufficient": decision.get("is_sufficient", True),
-            "reasoning": decision.get("reasoning", ""),
-            "prompt_used": eval_prompt,
-            "started_at": started,
-            "finished_at": finished,
-            "duration_seconds": round(finished - started, 3),
-        }
-    )
+    action = decision.get("action", "APPROVE")
+    is_sufficient = decision.get("is_sufficient", True)
+    reasoning = decision.get("reasoning", "")
+    question_to_ask = decision.get("question_to_ask")
+    proposed_nodes = decision.get("evaluator_proposed_nodes", [])
+    proposed_edges = decision.get("evaluator_proposed_edges", [])
 
-    result: Dict[str, Any] = {
-        "evaluation_logs": logs,
-        "iteration_count": iteration + 1,
+    current_iteration = state.get("iteration_count", 0) + 1
+
+    eval_record = {
+        "iteration": current_iteration,
+        "action": action,
+        "is_sufficient": is_sufficient,
+        "reasoning": reasoning,
+        "prompt_used": user_prompt,
+        "started_at": started,
+        "finished_at": finished,
+        "duration_seconds": round(finished - started, 3),
     }
 
-    if action == "NEEDS_CLARIFICATION":
-        result["status"] = "CLARIFICATION_NEEDED"
-        result["clarification_question"] = decision.get("question_to_ask")
-        result["clarification_reasoning"] = decision.get("reasoning")
-        result["final_answer"] = decision.get("question_to_ask") or decision.get(
-            "reasoning"
-        )
-        return result
+    updated_logs = list(state.get("evaluation_logs") or []) + [eval_record]
+    timeline = list(state.get("execution_timeline") or [])
+    timeline.append({
+        "step": len(timeline) + 1,
+        "phase": f"EVALUATION_ITERATION_{current_iteration}",
+        "agent": "EvaluatorAgent",
+        "prompt_used": user_prompt,
+        "action": action,
+        "is_sufficient": is_sufficient,
+        "reasoning": reasoning,
+        "proposed_nodes": proposed_nodes,
+        "proposed_edges": proposed_edges,
+        "duration_seconds": round(finished - started, 3),
+    })
 
-    if action == "REVISE_PLAN":
-        additional_nodes = decision.get("additional_nodes") or []
-        additional_edges = decision.get("additional_edges") or []
-        existing_ids = {n["id"] for n in nodes}
-        for idx, n in enumerate(additional_nodes):
-            if not n.get("id") or n["id"] in existing_ids:
-                n["id"] = f"node_rev{iteration}_{idx + 1}"
-            n.setdefault("status", "PENDING")
-            existing_ids.add(n["id"])
-        nodes.extend(additional_nodes)
-        blueprint["nodes"] = nodes
-        blueprint["edges"] = blueprint.get("edges", []) + additional_edges
-        result["blueprint"] = blueprint
-        result["status"] = "NEEDS_REVISION"
-        return result
+    if action == "NEEDS_REVISION":
+        return {
+            "status": "NEEDS_REVISION",
+            "revision_reasoning": reasoning,
+            "evaluator_proposed_nodes": proposed_nodes,
+            "evaluator_proposed_edges": proposed_edges,
+            "iteration_count": current_iteration,
+            "evaluation_logs": updated_logs,
+            "execution_timeline": timeline,
+        }
 
-    result["status"] = "APPROVED"
-    return result
+    elif action == "NEEDS_CLARIFICATION":
+        return {
+            "status": "CLARIFICATION_NEEDED",
+            "clarification_question": question_to_ask,
+            "clarification_reasoning": reasoning,
+            "final_answer": question_to_ask or reasoning,
+            "evaluation_logs": updated_logs,
+            "execution_timeline": timeline,
+        }
+
+    return {
+        "status": "APPROVED",
+        "evaluation_logs": updated_logs,
+        "execution_timeline": timeline,
+    }
 
 
 def route_after_planner(state: GraphState) -> str:
-    if state.get("status") == "CLARIFICATION_NEEDED":
-        return END
-    return "executor"
+    return END if state.get("status") == "CLARIFICATION_NEEDED" else "executor"
 
 
 def route_after_evaluation(state: GraphState) -> str:
     if state.get("status") == "NEEDS_REVISION":
-        return "executor"
+        if state.get("iteration_count", 0) >= MAX_REVISION_ITERATIONS:
+            return END
+        return "planner"
     return END
 
 
@@ -424,12 +375,8 @@ builder.add_node("executor", executor_agent_node)
 builder.add_node("evaluator", evaluator_agent_node)
 
 builder.set_entry_point("planner")
-builder.add_conditional_edges(
-    "planner", route_after_planner, {"executor": "executor", END: END}
-)
+builder.add_conditional_edges("planner", route_after_planner, {"executor": "executor", END: END})
 builder.add_edge("executor", "evaluator")
-builder.add_conditional_edges(
-    "evaluator", route_after_evaluation, {"executor": "executor", END: END}
-)
+builder.add_conditional_edges("evaluator", route_after_evaluation, {"planner": "planner", END: END})
 
 app_graph = builder.compile()

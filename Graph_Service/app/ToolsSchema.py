@@ -48,20 +48,24 @@ class AutonomousExecutionBlueprint(BaseModel):
 
 
 class EvaluatorDecision(BaseModel):
-    """Structured output for the Evaluator Agent — the third agent in the pipeline.
-    additional_nodes/additional_edges are required lists with empty defaults
-    (never Optional[List[...]]) because Gemini's structured-output validator
-    rejects an Optional wrapping a list of a complex model."""
-
-    action: str = Field(description="'APPROVE', 'NEEDS_CLARIFICATION', or 'REVISE_PLAN'")
-    is_sufficient: bool
-    reasoning: str = Field(description="WHY this decision was made — always required")
+    action: str = Field(
+        description="Must be one of: 'APPROVE', 'NEEDS_REVISION', or 'NEEDS_CLARIFICATION'"
+    )
+    is_sufficient: bool = Field(
+        description="True if the final answer fully covers all aspects of the user query; False otherwise."
+    )
+    reasoning: str = Field(
+        description="Comprehensive analytical critique covering completeness, accuracy, implicit intent coverage, and factual alignment."
+    )
     question_to_ask: Optional[str] = Field(
-        default=None, description="Required when action == 'NEEDS_CLARIFICATION'"
+        default=None,
+        description="Required ONLY when action == 'NEEDS_CLARIFICATION'. The exact follow-up question for the user.",
     )
-    additional_nodes: List[TaskNode] = Field(
-        default_factory=list, description="New nodes to add to the plan when action == 'REVISE_PLAN'"
+    evaluator_proposed_nodes: List[TaskNode] = Field(
+        default_factory=list,
+        description="New nodes recommended for the Planner when action == 'NEEDS_REVISION'.",
     )
-    additional_edges: List[GraphEdge] = Field(
-        default_factory=list, description="New edges to add to the plan when action == 'REVISE_PLAN'"
+    evaluator_proposed_edges: List[GraphEdge] = Field(
+        default_factory=list,
+        description="New edges recommended for the Planner when action == 'NEEDS_REVISION'.",
     )

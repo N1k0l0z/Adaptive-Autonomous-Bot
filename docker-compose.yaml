@@ -15,9 +15,9 @@ services:
       - ./Database_Service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 100s
+      timeout: 50s
+      retries: 20
 
   embedding_service:
     build: ./Embedding_Service
@@ -28,8 +28,8 @@ services:
       - hf_cache:/root/.cache/huggingface
     healthcheck:
       test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"]
-      interval: 5s
-      timeout: 3s
+      interval: 100s
+      timeout: 50s
       retries: 20
       start_period: 15s
 

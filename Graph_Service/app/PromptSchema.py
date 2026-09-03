@@ -1,142 +1,150 @@
 import json
-from typing import List, Dict, Any, Tuple
+from typing import Any, Dict, Tuple
 
-def get_planner_prompts(question: str, history: List[Dict[str, Any]]) -> Tuple[str, str]:
 
-    system_instruction = """You are an Autonomous Directed Acyclic Graph (DAG) Execution Architect.
-Your task is to analyze user queries and synthesize an optimal execution DAG blueprint using the platform's capabilities.
+def get_planner_prompts(state: Dict[str, Any], formatted_history: str) -> Tuple[str, str]:
+    """Generates system instructions and user prompts for the Planner Agent.
+
+    Empowers the model with full autonomy to decompose queries, reframe
+    search prompts, and execute DAG planning (including REVISON passes).
+    """
+    question = state["question"]
+    status = state.get("status")
+    is_revision = status == "NEEDS_REVISION"
+
+    system_instruction = """You are an Autonomous Directed Acyclic Graph (DAG) Execution Architect and Lead Strategic Planner.
+
+YOUR PURPOSE:
+Analyze user queries, conversation history, and evaluation feedback to construct an optimal parallel execution DAG blueprint (`AutonomousExecutionBlueprint`). You have FULL AUTONOMY to decide execution steps, query decomposition, search reframing, and prompt engineering for worker nodes.
 
 ===============================================================================
-AVAILABLE SYSTEM CAPABILITIES & TOOLS
+AVAILABLE NODE TYPES & CAPABILITIES
 ===============================================================================
 
-1. VECTOR SEARCH SERVICE (RAG / Document Retrieval)
-   - Action Type: "vector_search" or "search_rag"
-   - Trigger Keywords/Intent: Document retrieval, searching specific database facts, extracting knowledge chunks.
+1. VECTOR SEARCH ("vector_search" or "search_rag")
+   - Action: Retrieve domain knowledge from vector database.
    - Parameters:
-     * 'search_query' (str): Precise search string optimized for dense vector retrieval.
-     * 'top_k' (int): Number of similar document chunks to retrieve (default: 5, range: 1-20).
+     * 'search_query' (str): Precise query optimized for dense vector retrieval.
+     * 'top_k' (int): Document chunk count to retrieve (range: 1-20, default: 5).
 
-2. CONVERSATION HISTORY RETRIEVAL
-   - Action Type: "fetch_history"
-   - Trigger Keywords/Intent: When deep conversation memory beyond recent turns is required.
+2. LLM REASONING & SYNTHESIS ("synthesis", "comparative_analysis", "analysis")
+   - Action: Synthesize context, process data, or answer user requests.
    - Parameters:
-     * 'fetch_history_limit' (int): Number of recent conversation turns to retrieve.
+     * 'prompt_template' (str): Detailed worker instruction template. Interpolate parent outputs using '{node_1}', '{node_2}', etc.
 
-3. PLAN VALIDATOR AGENT
-   - Action Type: "plan_validation"
-   - Trigger Keywords/Intent: Assess synthesized outputs, verify financial constraint compliance, or validate plan feasibility.
+3. PLAN VALIDATOR ("plan_validation")
+   - Action: Validate synthesized output against specific logic or constraints.
    - Parameters:
-     * 'prompt_template' (str): Evaluation prompt template referencing previous node outputs (e.g., "{node_2}").
-     * 'validation_criteria' (str): Specific guidelines or bounds to validate against.
-
-4. LLM REASONING & SYNTHESIS NODE
-   - Action Type: Freeform (e.g., "synthesis", "financial_plan_generator", "comparative_analysis")
-   - Parameters:
-     * 'prompt_template' (str): Instruction template. Can dynamically interpolate parent node outputs using '{node_1}', '{node_2}'.
-
-5. CLARIFICATION ROUTER
-   - Action Type: "clarify_user_intent"
-   - Trigger Keywords/Intent: When essential parameters are missing.
-   - Parameters:
-     * 'question_to_ask' (str): Specific question presented to the user.
-     * 'clarification_reasoning' (str): Explicit explanation of what missing information forced this clarification.
+     * 'prompt_template' (str): Evaluation instruction.
+     * 'validation_criteria' (str): Rules/bounds to assess output completeness.
 
 ===============================================================================
-CLARIFICATION & CACHED CHUNK REUSE RULES
+AUTONOMOUS PLANNING & QUERY OPTIMIZATION DIRECTIVES
 ===============================================================================
-- If the prior turn status was 'NEEDS_CLARIFICATION', inspect the user's new input against the previous 'clarification_reasoning'.
-- REUSE PREVIOUS RAG CHUNKS: If knowledge chunks were already retrieved in a prior turn and the query topic has not changed, DO NOT run 'vector_search' again. Route directly to synthesis and validation nodes using the cached context.
 
-===============================================================================
-MANDATORY CLARIFICATION RULE
-===============================================================================
-If a user requests a financial plan, legal analysis, or system architecture BUT omits critical parameters (e.g., budget, risk profile, time horizon, region, data scope), you MUST generate a single-node clarification graph:
-  - node_type: "clarify_user_intent"
-  - question_to_ask: "<Clear follow-up question>"
-  - clarification_reasoning: "<Why clarification was necessary>"
+1. QUERY DECOMPOSITION & SUB-QUESTIONS:
+   - For complex, multi-part, or multi-entity queries, split the request into separate 'vector_search' nodes running sub-questions in parallel.
+
+2. QUERY AGGREGATION & RE-FRAMING:
+   - For vague, conversational, or sparse queries (e.g., "hello", short input), AGGREGATE conversation history context and RE-FRAME the search queries into comprehensive, context-rich questions.
+   - FULL AUTONOMY: You are authorized and encouraged to modify, expand, or rephrase the user's literal query into targeted search strings that maximize vector retrieval quality.
+
+3. DAG DEPENDENCIES:
+   - Construct explicit dependency links in 'edges' (source -> target).
+   - Ensure synthesis nodes reference upstream node IDs in their 'prompt_template' (e.g., "Based on context from {node_1} and {node_2}...").
+
+4. RE-PLANNING ON REVISION (NEEDS_REVISION):
+   - When handling revision feedback, analyze the previous answer, user prompt, and evaluator critique.
+   - Generate an updated graph with the required additional search queries or updated synthesis prompts to resolve gaps completely."""
+
+    user_prompt = f"""=== CONVERSATION HISTORY ===
+{formatted_history}
+
+=== CURRENT USER QUESTION ===
+"{question}"
 """
 
-    formatted_history = []
-    cached_chunks_summary = ""
-    last_clarification_reasoning = ""
+    if is_revision:
+        revision_reasoning = state.get("revision_reasoning", "")
+        previous_answer = state.get("final_answer", "")
+        eval_proposed_nodes = state.get("evaluator_proposed_nodes", [])
+        eval_proposed_edges = state.get("evaluator_proposed_edges", [])
 
-    for turn in history[-5:]:
-        role = turn.get("role", "user")
-        raw_msg = turn.get("message", "")
+        user_prompt += f"""
 
-        if role == "assistant":
-            try:
-                msg_json = json.loads(raw_msg)
-                status = msg_json.get("status", "SUCCESS")
-                answer = msg_json.get("final_answer", "")
-                reasoning = msg_json.get("clarification_reasoning", "")
-                chunks = msg_json.get("retrieved_chunks", [])
+=== REVISION FEEDBACK (NEEDS_REVISION) ===
+The previous plan produced an incomplete or flawed output.
 
-                if status == "NEEDS_CLARIFICATION":
-                    last_clarification_reasoning = reasoning
+- Previous Synthesized Answer:
+{previous_answer}
 
-                if chunks:
-                    cached_chunks_summary = f"\n[CACHED RAG CHUNKS AVAILABLE]: {len(chunks)} chunks cached from previous retrieval."
+- Evaluator Critique & Reason for Revision:
+{revision_reasoning}
 
-                formatted_history.append(f"- Assistant (Status: {status}): {answer}")
-                if reasoning:
-                    formatted_history.append(f"  [Clarification Rationale]: {reasoning}")
-            except Exception:
-                formatted_history.append(f"- Assistant: {raw_msg}")
-        else:
-            formatted_history.append(f"- User: {raw_msg}")
+- Evaluator Proposed Nodes:
+{json.dumps(eval_proposed_nodes, indent=2) if eval_proposed_nodes else "None"}
 
-    history_str = "\n".join(formatted_history) if formatted_history else "None"
+- Evaluator Proposed Edges:
+{json.dumps(eval_proposed_edges, indent=2) if eval_proposed_edges else "None"}
 
-    user_prompt_payload = f"""Active History Context:
-{history_str}
-{cached_chunks_summary}
+INSTRUCTION: Re-evaluate the user question and context against the critique. Synthesize an updated execution blueprint with necessary structural changes or refined search queries to address the issue."""
 
-Current User Input: "{question}"
-
-Task: Build the optimal autonomous execution graph JSON strictly following the system capabilities."""
-
-    return system_instruction, user_prompt_payload
+    return system_instruction, user_prompt
 
 
-def get_evaluator_prompts(
-    question: str, sub_questions: List[str], final_answer: str
-) -> Tuple[str, str]:
-    """Prompts for the Evaluator Agent — the third and last agent in the
-    pipeline. It sees exactly two things: what was actually searched for
-    (sub_questions, or the refined single question if there was no split),
-    and what the synthesis stage produced (final_answer). Nothing else."""
 
-    system_instruction = """You are the Evaluator Agent, the final quality gate in an autonomous
-research pipeline. You did not write the answer — a separate synthesis step did, using
-context retrieved by separate parallel searches. Your only job is to judge the OUTCOME.
+def get_evaluator_prompts(state: Dict[str, Any], formatted_history: str) -> Tuple[str, str]:
+    """Generates system instructions and user prompt for the Evaluator Agent."""
+    question = state["question"]
+    final_answer = state.get("final_answer", "")
+    blueprint = state.get("blueprint", {})
+    executor_outputs = state.get("executor_outputs", {})
 
-Decide exactly one action:
-- "APPROVE": the answer fully and directly addresses every sub-question below.
-- "NEEDS_CLARIFICATION": the answer is incomplete or impossible to complete because something
-  is missing from the USER (not from search or synthesis) — e.g. an ambiguous term, a missing
-  parameter only the user can supply. Set question_to_ask to the exact question to put to the user.
-- "REVISE_PLAN": the answer is incomplete because the PLAN itself was insufficient — a
-  sub-question was never searched, retrieved context was thin, or another synthesis/validation
-  pass is needed. Set additional_nodes/additional_edges describing exactly what to add.
+    system_instruction = """You are the Lead Quality Assurance and Audit Evaluator Agent for an autonomous multi-agent framework.
 
-Always give clear, specific reasoning for your decision — this reasoning is shown to the user
-and to the engineering team as the audit trail, so state plainly what is missing or confirmed."""
+YOUR RESPONSIBILITY:
+Perform a deep analytical evaluation of the 'Synthesized Final Answer' against the 'Original User Question' and 'Conversation History'. Determine whether ALL direct and implicit aspects of the user's request have been completely, accurately, and thoroughly addressed.
 
-    sub_questions_block = "\n".join(f"- {q}" for q in sub_questions) if sub_questions else f"- {question}"
+===============================================================================
+EVALUATION CRITERIA & ANALYTICS
+===============================================================================
+In your 'reasoning' field, you must provide a detailed breakdown covering:
+1. COMPLETENESS & ASPECT COVERAGE: Were all sub-questions, entities, or implicit requirements in the prompt answered?
+2. FACTUAL ACCURACY & CONTEXT ALIGNMENT: Is the response grounded in the retrieved knowledge and context without hallucinations?
+3. RELEVANCE & STRUCTURE: Did the answer deliver direct, high-value information without fluff or unnecessary setups?
 
-    user_prompt_payload = f"""Original user question: "{question}"
+===============================================================================
+DECISION ACTIONS & RULES
+===============================================================================
 
-Sub-questions actually investigated by the plan:
-{sub_questions_block}
+1. ACTION: 'APPROVE' (is_sufficient = True)
+   - Use when the answer completely satisfies all aspects of the user query.
+   - Set 'evaluator_proposed_nodes' and 'evaluator_proposed_edges' to empty lists [].
 
-Synthesized final answer:
-\"\"\"
-{final_answer}
-\"\"\"
+2. ACTION: 'NEEDS_REVISION' (is_sufficient = False)
+   - Use when the plan failed to retrieve vital facts, missed explicit sub-questions, or generated an incomplete answer.
+   - Explain explicitly in 'reasoning' WHAT is missing.
+   - Propose specific new TaskNodes (e.g., additional vector search queries) and GraphEdges in 'evaluator_proposed_nodes' and 'evaluator_proposed_edges' to guide the Planner's re-planning phase.
 
-Task: Evaluate whether this answer fully covers every sub-question above, and choose ONE action
-(APPROVE / NEEDS_CLARIFICATION / REVISE_PLAN) with reasoning."""
+3. ACTION: 'NEEDS_CLARIFICATION' (is_sufficient = False)
+   - Use ONLY when critical parameters required to answer the question are entirely missing and cannot be inferred from history.
+   - Populate 'question_to_ask' with a clear, concise question to present to the user."""
 
-    return system_instruction, user_prompt_payload
+    user_prompt = f"""=== CONVERSATION HISTORY ===
+{formatted_history}
+
+=== ORIGINAL USER QUESTION ===
+"{question}"
+
+=== EXECUTED DAG BLUEPRINT ===
+{json.dumps(blueprint, indent=2)}
+
+=== INTERMEDIATE EXECUTION OUTPUTS ===
+{json.dumps(executor_outputs, indent=2)}
+
+=== SYNTHESIZED FINAL ANSWER TO EVALUATE ===
+"{final_answer}"
+
+Task: Audit the final answer against the user's intent. Produce your analytical evaluation matching the EvaluatorDecision schema."""
+
+    return system_instruction, user_prompt
