@@ -3,11 +3,6 @@ from typing import Any, Dict, Tuple
 
 
 def get_planner_prompts(state: Dict[str, Any], formatted_history: str) -> Tuple[str, str]:
-    """Generates system instructions and user prompts for the Planner Agent.
-
-    Empowers the model with full autonomy to decompose queries, reframe
-    search prompts, and execute DAG planning (including REVISON passes).
-    """
     question = state["question"]
     status = state.get("status")
     is_revision = status == "NEEDS_REVISION"
@@ -17,9 +12,7 @@ def get_planner_prompts(state: Dict[str, Any], formatted_history: str) -> Tuple[
 YOUR PURPOSE:
 Analyze user queries, conversation history, and evaluation feedback to construct an optimal parallel execution DAG blueprint (`AutonomousExecutionBlueprint`). You have FULL AUTONOMY to decide execution steps, query decomposition, search reframing, and prompt engineering for worker nodes.
 
-===============================================================================
 AVAILABLE NODE TYPES & CAPABILITIES
-===============================================================================
 
 1. VECTOR SEARCH ("vector_search" or "search_rag")
    - Action: Retrieve domain knowledge from vector database.
@@ -38,9 +31,7 @@ AVAILABLE NODE TYPES & CAPABILITIES
      * 'prompt_template' (str): Evaluation instruction.
      * 'validation_criteria' (str): Rules/bounds to assess output completeness.
 
-===============================================================================
 AUTONOMOUS PLANNING & QUERY OPTIMIZATION DIRECTIVES
-===============================================================================
 
 1. QUERY DECOMPOSITION & SUB-QUESTIONS:
    - For complex, multi-part, or multi-entity queries, split the request into separate 'vector_search' nodes running sub-questions in parallel.

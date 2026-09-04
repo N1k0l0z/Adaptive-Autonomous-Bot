@@ -86,7 +86,7 @@ async function loadConversationHistory(convId) {
         if (!response.ok) throw new Error(`HTTP ${response.status}: Failed to reach history endpoint.`);
         
         const data = await response.json();
-        chatFeed.innerHTML = ""; // Clear loader
+        chatFeed.innerHTML = "";
 
         const messages = data.messages || [];
 
@@ -142,7 +142,7 @@ function renderSidebar() {
 
 function updateHeaderStatus(status) {
     statusBadge.classList.remove("hidden", "bg-yellow-500/10", "text-yellow-400", "bg-emerald-500/10", "text-emerald-400");
-    if (status === "NEEDS_CLARIFICATION" || status === "NEEDS_REVISION") {
+    if (status === "NEEDS_CLARIFICATION" || status === "NEEDS_REVISION" || status === "CLARIFICATION_NEEDED") {
         statusBadge.textContent = status.replace("_", " ");
         statusBadge.classList.add("bg-yellow-500/10", "text-yellow-400", "border", "border-yellow-500/20");
     } else {
@@ -159,43 +159,77 @@ function appendUserMessage(text) {
     chatFeed.scrollTop = chatFeed.scrollHeight;
 }
 
+function renderTimelineHtml(timeline) {
+    if (!Array.isArray(timeline) || timeline.length === 0) return "";
+
+    return timeline.map((step, idx) => {
+        const agent = step.agent || step.assigned_agent || step.node_type || "Execution Step";
+        const status = step.status || step.action || "EXECUTED";
+        const stepId = step.node_id || step.id || `step_${idx + 1}`;
+        const duration = step.duration_seconds ? `${step.duration_seconds}s` : "";
+        const preview = step.output_preview || step.reasoning || "";
+
+        const badgeColor = (status === "EXECUTED" || status === "APPROVED" || status === "APPROVE")
+            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
+            : (status === "NEEDS_CLARIFICATION" || status === "NEEDS_REVISION" || status === "CLARIFICATION_NEEDED")
+            ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+            : "bg-blue-500/10 text-blue-400 border-blue-500/20";
+
+        return `
+            <div class="p-3 rounded-lg bg-[#111112] border border-gray-800/80 text-xs space-y-2">
+                <div class="flex items-start gap-3">
+                    <div class="w-6 h-6 rounded-full bg-blue-600/20 border border-blue-500/30 text-blue-400 flex items-center justify-center font-mono font-semibold shrink-0 text-[11px]">
+                        ${idx + 1}
+                    </div>
+                    <div class="flex-1 min-w-0 space-y-1">
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="font-semibold text-gray-200 truncate">${escapeHtml(agent)}</span>
+                            <div class="flex items-center gap-2 shrink-0">
+                                ${duration ? `<span class="text-[10px] text-gray-500 font-mono">${duration}</span>` : ""}
+                                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono border ${badgeColor}">${escapeHtml(status)}</span>
+                            </div>
+                        </div>
+                        <div class="text-[10px] text-gray-500 font-mono">${escapeHtml(stepId)}</div>
+                        ${preview ? `<p class="text-gray-300 font-mono text-[11px] leading-relaxed break-words mt-1">${escapeHtml(preview)}</p>` : ""}
+                    </div>
+                </div>
+
+                <details class="mt-2 text-[11px] bg-[#0a0a0b] border border-gray-800/80 rounded-md overflow-hidden">
+                    <summary class="px-2.5 py-1.5 cursor-pointer text-gray-400 hover:text-cyan-400 font-mono select-none flex justify-between items-center bg-[#151517]">
+                        <span>View Step Payload & JSON Structure</span>
+                        <span class="text-[10px] text-gray-500">▼</span>
+                    </summary>
+                    <div class="p-2.5 overflow-x-auto max-h-72 bg-[#0c0c0d]">
+                        <pre class="text-cyan-300 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all">${escapeHtml(JSON.stringify(step, null, 2))}</pre>
+                    </div>
+                </details>
+            </div>
+        `;
+    }).join("");
+}
+
 function appendAssistantMessage(data) {
     const div = document.createElement("div");
     div.className = "flex gap-4 max-w-3xl";
 
-    const parsedMarkdown = typeof marked !== "undefined" ? marked.parse(data.final_answer || "") : escapeHtml(data.final_answer || "");
-    const blueprintJson = data.blueprint ? JSON.stringify(data.blueprint, null, 2) : null;
+    const answerText = data.final_answer || data.clarification_question || "";
+    const parsedMarkdown = typeof marked !== "undefined" ? marked.parse(answerText) : escapeHtml(answerText);
+    const timeline = data.execution_timeline || [];
 
     div.innerHTML = `
         <div class="w-8 h-8 rounded-full bg-blue-600/20 border border-blue-500/40 text-blue-400 flex items-center justify-center font-bold text-xs shrink-0">AG</div>
         <div class="flex-1 space-y-3">
             <div class="prose text-sm text-gray-200">${parsedMarkdown}</div>
             
-            ${data.blueprint || data.evaluation_logs?.length ? `
+            ${timeline.length > 0 ? `
             <details class="text-xs bg-[#1e1e1f] border border-gray-800 rounded-xl overflow-hidden">
                 <summary class="px-3 py-2 cursor-pointer text-gray-400 hover:text-gray-200 font-mono select-none flex justify-between items-center">
-                    <span>Execution Graph Metadata</span>
+                    <span>Execution Timeline (${timeline.length} Steps)</span>
                     <span class="text-cyan-400 font-semibold">${data.status || 'SUCCESS'}</span>
                 </summary>
-                <div class="p-3 border-t border-gray-800 space-y-3 bg-[#171718]">
-                    ${data.planner_reasoning ? `<p class="text-gray-300"><strong>Planner Reasoning:</strong> ${escapeHtml(data.planner_reasoning)}</p>` : ''}
-                    ${data.clarification_reasoning ? `<p class="text-yellow-400"><strong>Clarification Reasoning:</strong> ${escapeHtml(data.clarification_reasoning)}</p>` : ''}
-                    
-                    ${data.evaluation_logs?.length ? `
-                    <div class="border-t border-gray-800 pt-2">
-                        <strong class="text-gray-300 block mb-1">Evaluator Logs:</strong>
-                        <ul class="list-disc list-inside text-gray-400 space-y-1">
-                            ${data.evaluation_logs.map(log => `<li><span class="${log.verdict === 'APPROVE' ? 'text-emerald-400' : 'text-yellow-400'}">[${log.verdict}]</span> ${escapeHtml(log.feedback || log.reasoning || '')}</li>`).join('')}
-                        </ul>
-                    </div>
-                    ` : ''}
-
-                    ${blueprintJson ? `
-                    <div class="border-t border-gray-800 pt-2">
-                        <strong class="text-gray-300 block mb-1">Blueprint Structure:</strong>
-                        <pre class="text-[11px] text-gray-400 overflow-x-auto bg-[#111112] p-2 rounded-lg border border-gray-800/80">${escapeHtml(blueprintJson)}</pre>
-                    </div>
-                    ` : ''}
+                <div class="p-3 border-t border-gray-800 space-y-2 bg-[#171718]">
+                    ${data.clarification_reasoning ? `<p class="text-yellow-400 text-xs mb-2"><strong>Reasoning:</strong> ${escapeHtml(data.clarification_reasoning)}</p>` : ''}
+                    ${renderTimelineHtml(timeline)}
                 </div>
             </details>
             ` : ''}
@@ -236,21 +270,9 @@ function appendErrorMessage(msg) {
 
 function normalizePayload(data) {
     if (!data) return {};
-    
-    if (data.blueprint && Array.isArray(data.blueprint.edges)) {
-        data.blueprint.edges = data.blueprint.edges.map(edge => {
-            if (edge.source && edge.target) return edge;
-            if (edge.from && edge.to) return { source: edge.from, target: edge.to };
-            const entries = Object.entries(edge);
-            if (entries.length > 0) return { source: entries[0][0], target: entries[0][1] };
-            return edge;
-        });
+    if (!Array.isArray(data.execution_timeline)) {
+        data.execution_timeline = [];
     }
-
-    if (!data.planner_reasoning && data.blueprint?.planner_reasoning) {
-        data.planner_reasoning = data.blueprint.planner_reasoning;
-    }
-
     return data;
 }
 

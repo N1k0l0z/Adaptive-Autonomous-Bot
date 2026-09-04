@@ -1,23 +1,23 @@
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict, Annotated
 from pydantic import BaseModel, Field
+import operator
 
 
-class GraphState(TypedDict, total=False):
+class GraphState(TypedDict):
     question: str
     conv_id: str
     run_id: str
     chat_history: List[Dict[str, Any]]
-    blueprint: Optional[Dict[str, Any]]
-    planner_trace: Optional[Dict[str, Any]]
+    blueprint: Any
+    planner_trace: Any
     node_outputs: Dict[str, Any]
     evaluation_logs: List[Dict[str, Any]]
+    execution_timeline: List[Dict[str, Any]]  # Standard list (no operator.add)
     iteration_count: int
     final_answer: str
     status: str
-    clarification_question: Optional[str]
-    clarification_reasoning: Optional[str]
-    execution_timeline: List[Dict[str, Any]]  # Append-only chronological trace
-
+    clarification_question: Any
+    clarification_reasoning: Any
 
 class ProcessQueryRequest(BaseModel):
     question: str
@@ -43,18 +43,18 @@ class AuditTrail(BaseModel):
     final_answer: str
 
 
-class ProcessQueryResponse(AuditTrail):
-    """Adds back the old top-level fields (blueprint/nodes/edges/node_outputs/
-    retrieved_chunks/execution_trace) so existing UI code written against the
-    previous pipeline's response shape keeps working unchanged, alongside the
-    new planner/steps/evaluations structure."""
-    blueprint: Dict[str, Any]
-    nodes: List[Dict[str, Any]]
-    edges: List[Dict[str, Any]]
-    node_outputs: Dict[str, Any]
-    retrieved_chunks: List[Dict[str, Any]]
-    execution_trace: List[Dict[str, Any]]
-    evaluation_logs: List[Dict[str, Any]]
+class ProcessQueryResponse(BaseModel):
+    run_id: str
+    conv_id: str
+    question: str
+    status: str
+    final_answer: str
+
+    clarification_question: Optional[str] = None
+    clarification_reasoning: Optional[str] = None
+    execution_timeline: List[Dict[str, Any]] = []
+
+  
 
 
 class HistoryResponse(BaseModel):

@@ -109,3 +109,45 @@ def format_history_for_planner_prompt(cleaned_turns: List[Dict[str, Any]]) -> st
                 )
 
     return "\n\n".join(formatted_lines)
+
+
+
+from typing import Any, Dict, List
+
+def build_ui_graph_payload(
+    planner_trace: Dict[str, Any],
+    dag_nodes: List[Dict[str, Any]],
+    evaluator_entries: List[Dict[str, Any]],
+    raw_edges: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    # Filter out self-referential edges
+    edges = []
+    for e in raw_edges:
+        e_dict = e.model_dump() if hasattr(e, "model_dump") else e
+        if e_dict.get("source") != e_dict.get("target"):
+            edges.append(e_dict)
+
+    if not dag_nodes:
+        return edges
+
+    # Identify DAG entry and leaf nodes
+    dag_ids = [n.get("id") if isinstance(n, dict) else getattr(n, "id") for n in dag_nodes]
+    internal_sources = {e["source"] for e in edges}
+    internal_targets = {e["target"] for e in edges}
+
+    entry_nodes = [n_id for n_id in dag_ids if n_id not in internal_targets]
+    leaf_nodes = [n_id for n_id in dag_ids if n_id not in internal_sources]
+
+    # Connect Planner -> DAG Entry Nodes
+    if planner_trace and planner_trace.get("id"):
+        planner_id = planner_trace["id"]
+        for entry_id in (entry_nodes or dag_ids[:1]):
+            edges.append({"source": planner_id, "target": entry_id, "label": "generates plan"})
+
+    # Connect DAG Leaf Nodes -> Evaluator
+    if evaluator_entries:
+        first_eval_id = evaluator_entries[0]["id"]
+        for leaf_id in (leaf_nodes or dag_ids[-1:]):
+            edges.append({"source": leaf_id, "target": first_eval_id, "label": "audits result"})
+
+    return edges

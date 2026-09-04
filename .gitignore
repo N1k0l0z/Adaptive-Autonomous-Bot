@@ -6,3 +6,4 @@ test.ipynb
 master_chunks.parquet
 .env
 gcp-key.json
+Graph_Lesson.ipynb

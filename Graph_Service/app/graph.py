@@ -15,6 +15,10 @@ from utils import format_history_for_planner_prompt, parse_raw_conversation_hist
 MAX_REVISION_ITERATIONS = 2
 
 
+# ============================================================================
+# HELPER FUNCTIONS & EXECUTORS
+# ============================================================================
+
 def execute_vector_search_agent(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
     raw_results = perform_vector_search(query=query, top_k=top_k)
     formatted_chunks = []
@@ -108,6 +112,10 @@ def _execute_task_node(
     return node
 
 
+# ============================================================================
+# GRAPH NODES
+# ============================================================================
+
 def planner_agent_node(state: GraphState) -> Dict[str, Any]:
     question = state["question"]
     raw_history = state.get("chat_history", [])
@@ -120,6 +128,19 @@ def planner_agent_node(state: GraphState) -> Dict[str, Any]:
     is_revision = state.get("status") == "NEEDS_REVISION"
     current_iteration = state.get("iteration_count", 0)
     started = time.time()
+
+    timeline = list(state.get("execution_timeline") or [])
+
+    # Step 1: User input (added only once at graph entry)
+    if not timeline:
+        timeline.append({
+            "step": 1,
+            "phase": "USER_INPUT",
+            "agent": "User",
+            "node_id": "user_query",
+            "output_preview": question,
+            "status": "RECEIVED",
+        })
 
     response = client.models.generate_content(
         model=MODEL_NAME,
@@ -135,8 +156,8 @@ def planner_agent_node(state: GraphState) -> Dict[str, Any]:
     finished = time.time()
 
     nodes = blueprint.get("nodes", [])
+    prefix = f"rev{current_iteration}_" if is_revision else ""
     for idx, n in enumerate(nodes):
-        prefix = f"rev{current_iteration}_" if is_revision else ""
         if not n.get("id") or (is_revision and not n["id"].startswith("rev")):
             n["id"] = f"{prefix}node_{idx + 1}"
         n.setdefault("status", "PENDING")
@@ -144,34 +165,25 @@ def planner_agent_node(state: GraphState) -> Dict[str, Any]:
     blueprint["nodes"] = nodes
     blueprint.setdefault("edges", [])
 
+    # Record Planner execution trace + full blueprint schema
     planner_trace = {
-        "id": f"planner_rev_{current_iteration}" if is_revision else "planner_initial",
-        "assigned_agent": "planner_agent",
-        "step_description": (
-            "Re-plan using Evaluator's proposed structural changes"
-            if is_revision
-            else "Contextualize/decompose the question against chat history and design a parallel-execution DAG"
-        ),
-        "input": {"question": question, "history_turns_considered": len(parsed_history)},
+        "step": len(timeline) + 1,
+        "phase": f"REPLANNING_ITERATION_{current_iteration}" if is_revision else "INITIAL_PLANNING",
+        "agent": "PlannerAgent",
+        "node_id": f"planner_rev_{current_iteration}" if is_revision else "planner_initial",
+        "status": "EXECUTED",
+        "output_preview": f"Generated plan with {len(nodes)} nodes and {len(blueprint.get('edges', []))} edges.",
+        "blueprint": blueprint,
         "prompt_used": user_prompt,
         "system_instruction": sys_instruction,
-        "status": "EXECUTED",
         "runtime_output": raw_response_text,
-        "error": None,
+        "input": {"question": question, "history_turns_considered": len(parsed_history)},
         "started_at": started,
         "finished_at": finished,
         "duration_seconds": round(finished - started, 3),
     }
 
-    timeline = list(state.get("execution_timeline") or [])
-    timeline.append({
-        "step": len(timeline) + 1,
-        "phase": f"REPLANNING_ITERATION_{current_iteration}" if is_revision else "INITIAL_PLANNING",
-        "agent": "PlannerAgent",
-        "prompt_used": user_prompt,
-        "output_blueprint": blueprint,
-        "duration_seconds": round(finished - started, 3),
-    })
+    timeline.append(planner_trace)
 
     return {
         "blueprint": blueprint,
@@ -255,14 +267,32 @@ def executor_agent_node(state: GraphState) -> Dict[str, Any]:
         final_ans = str(final_ans)
 
     timeline = list(state.get("execution_timeline") or [])
-    iteration = state.get("iteration_count", 0)
-    timeline.append({
-        "step": len(timeline) + 1,
-        "phase": f"DAG_EXECUTION_ITERATION_{iteration}",
-        "agent": "ExecutorAgent",
-        "executed_nodes": nodes_ordered,
-        "synthesis_output": final_ans,
-    })
+    
+    # Store complete metadata per DAG node execution
+    for n in nodes_ordered:
+        out_val = n.get("runtime_output") or n.get("reasoning") or ""
+        
+        if isinstance(out_val, list):
+            preview = f"Retrieved {len(out_val)} RAG chunks."
+        else:
+            preview = str(out_val)[:200]
+
+        timeline.append({
+            "step": len(timeline) + 1,
+            "agent": n.get("assigned_agent") or n.get("node_type") or "ExecutorAgent",
+            "node_id": n.get("id"),
+            "node_type": n.get("node_type"),
+            "status": n.get("status", "EXECUTED"),
+            "output_preview": preview,
+            "runtime_output": n.get("runtime_output"),  # Preserves full RAG search output
+            "prompt_template": n.get("prompt_template"),
+            "resolved_prompt": n.get("resolved_prompt"),
+            "search_query": n.get("search_query"),
+            "top_k": n.get("top_k"),
+            "reasoning": n.get("reasoning"),
+            "duration_seconds": n.get("duration_seconds"),
+            "node_data": dict(n),
+        })
 
     return {
         "blueprint": {**blueprint, "nodes": nodes_ordered},
@@ -316,17 +346,24 @@ def evaluator_agent_node(state: GraphState) -> Dict[str, Any]:
 
     updated_logs = list(state.get("evaluation_logs") or []) + [eval_record]
     timeline = list(state.get("execution_timeline") or [])
+
     timeline.append({
         "step": len(timeline) + 1,
         "phase": f"EVALUATION_ITERATION_{current_iteration}",
         "agent": "EvaluatorAgent",
-        "prompt_used": user_prompt,
+        "node_id": f"evaluator_iter_{current_iteration}",
+        "status": action,
+        "output_preview": reasoning,
+        "reasoning": reasoning,
         "action": action,
         "is_sufficient": is_sufficient,
-        "reasoning": reasoning,
+        "question_to_ask": question_to_ask,
         "proposed_nodes": proposed_nodes,
         "proposed_edges": proposed_edges,
+        "prompt_used": user_prompt,
+        "system_instruction": sys_instruction,
         "duration_seconds": round(finished - started, 3),
+        "evaluation_record": eval_record,
     })
 
     if action == "NEEDS_REVISION":
@@ -357,6 +394,10 @@ def evaluator_agent_node(state: GraphState) -> Dict[str, Any]:
     }
 
 
+# ============================================================================
+# CONDITIONAL ROUTING & GRAPH COMPILATION
+# ============================================================================
+
 def route_after_planner(state: GraphState) -> str:
     return END if state.get("status") == "CLARIFICATION_NEEDED" else "executor"
 
@@ -370,13 +411,23 @@ def route_after_evaluation(state: GraphState) -> str:
 
 
 builder = StateGraph(GraphState)
+
 builder.add_node("planner", planner_agent_node)
 builder.add_node("executor", executor_agent_node)
 builder.add_node("evaluator", evaluator_agent_node)
 
 builder.set_entry_point("planner")
-builder.add_conditional_edges("planner", route_after_planner, {"executor": "executor", END: END})
+
+builder.add_conditional_edges(
+    "planner",
+    route_after_planner,
+    {"executor": "executor", END: END}
+)
 builder.add_edge("executor", "evaluator")
-builder.add_conditional_edges("evaluator", route_after_evaluation, {"planner": "planner", END: END})
+builder.add_conditional_edges(
+    "evaluator",
+    route_after_evaluation,
+    {"planner": "planner", END: END}
+)
 
 app_graph = builder.compile()
