@@ -1,0 +1,10 @@
+.pytest_cache
+aab_venv
+__pycache__
+Document_Upload_Service/Raw_Content/
+test.ipynb
+master_chunks.parquet
+full_metadata.parquet
+.env
+gcp-key.json
+Graph_Lesson.ipynb

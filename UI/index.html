@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Graph Service Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-[#131314] text-gray-200 h-screen flex overflow-hidden font-sans">
+
+    <aside class="w-72 bg-[#1e1e1f] flex flex-col border-r border-gray-800 shrink-0">
+        <div class="p-4 border-b border-gray-800">
+            <button id="new-chat-btn" class="w-full flex items-center gap-3 px-4 py-3 bg-[#2b2c2e] hover:bg-[#37383b] text-white rounded-full transition font-medium text-sm">
+                <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                New Chat
+            </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-2 space-y-1" id="conversations-list">
+        </div>
+
+        <div class="p-4 border-t border-gray-800 text-xs text-gray-500 text-center">
+        </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col h-full bg-[#131314] relative">
+        <header class="h-14 border-b border-gray-800/60 px-6 flex items-center justify-between bg-[#131314]">
+            <div class="flex items-center gap-3">
+                <span class="font-semibold text-gray-200">Execution Session:</span>
+                <span id="active-conv-id" class="text-xs font-mono bg-[#2b2c2e] px-2.5 py-1 rounded-md text-cyan-400">conv_new</span>
+            </div>
+            <div id="status-badge" class="hidden text-xs px-2.5 py-1 rounded-full font-medium"></div>
+        </header>
+
+        <div id="chat-feed" class="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl w-full mx-auto">
+        </div>
+
+        <div class="p-4 max-w-4xl w-full mx-auto">
+            <form id="chat-form" class="relative bg-[#1e1e1f] rounded-2xl border border-gray-700/60 focus-within:border-gray-500 transition-all p-2 flex flex-col">
+                <textarea id="user-input" rows="2" placeholder="Ask a question or specify an autonomous execution plan..." class="w-full bg-transparent text-gray-100 placeholder-gray-500 px-3 py-2 focus:outline-none resize-none text-sm"></textarea>
+                <div class="flex justify-between items-center px-2 pt-1 border-t border-gray-800/40">
+                    <span class="text-xs text-gray-500">Press Shift+Enter for new line</span>
+                    <button type="submit" id="send-btn" class="bg-white hover:bg-gray-200 text-black p-2 rounded-xl transition flex items-center justify-center">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

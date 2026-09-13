@@ -1,0 +1,8 @@
+model_registry:
+  gemini-2.5-flash:
+    description: "Balanced reasoning, complex synthesis, multi-step logic, and general text transformations."
+    when_to_use: "Use for synthesis nodes, context fusion, complex reasoning, and final answer structuring."
+
+  gemini-2.5-flash-lite:
+    description: "Ultra-fast, lowest-cost model for lightweight processing."
+    when_to_use: "Use for simple query rewriting, keyword extraction, intent classification, or single-entity filtering nodes."

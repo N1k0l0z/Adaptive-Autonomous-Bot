@@ -1,0 +1,6 @@
+Metric,Standard RAG,Autonomous RAG,Absolute Delta
+Final Performance Score (1-10),4.68,8.28,3.6
+Coverage Component (1-10),3.46,8.02,4.56
+Groundedness Component (1-10),8.5,9.44,0.94
+Rigor Component (1-10),4.22,7.9,3.68
+Average Word Count,586.4,778.7,192.4

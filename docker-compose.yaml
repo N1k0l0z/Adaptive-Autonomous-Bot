@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  database_pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: database_pgvector
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./Database_Service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 100s
+      timeout: 50s
+      retries: 20
+
+  embedding_service:
+    build: ./Embedding_Service
+    container_name: embedding_service
+    ports:
+      - "8001:8001"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8001/health\")' || exit 1"]
+      interval: 100s
+      timeout: 50s
+      retries: 20
+      start_period: 15s
+
+  doc_upload_service:
+    build: ./Document_Upload_Service
+    container_name: doc_upload_service
+    ports:
+      - "8002:8002"
+    environment:
+      DB_HOST: database_pgvector
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      EMBEDDING_SERVICE_URL: http://embedding_service:8001
+      PDF_DIR: /app/Raw_Content
+    volumes:
+      - ./Document_Upload_Service/Raw_Content:/app/Raw_Content
+    depends_on:
+      database_pgvector:
+        condition: service_healthy
+      embedding_service:
+        condition: service_healthy
+
+  db_api:
+    build: ./Database_Service
+    container_name: database_api
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: database_pgvector
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_PORT: 5432
+    depends_on:
+      database_pgvector:
+        condition: service_healthy
+
+  graph_service:
+    build: ./Graph_Service
+    container_name: graph_service
+    ports:
+      - "8003:8003"
+    environment:
+      - PYTHONPATH=/app:/app/app
+      - DATABASE_SERVICE_URL=http://database_api:8000
+      - EMBEDDING_SERVICE_URL=http://embedding_service:8001
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+      - DB_SERVICE_URL=http://db_service:8000
+      - EMBEDDING_SERVICE_URL=http://embedding_service:8001
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./Graph_Service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+    depends_on:
+      - db_api
+      - embedding_service
+
+  ui_service:
+    image: nginx:alpine
+    container_name: ui_service
+    ports:
+      - "8090:80"
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+    restart: always
+    depends_on:
+      - graph_service
+
+volumes:
+  postgres_data:
+  hf_cache:
