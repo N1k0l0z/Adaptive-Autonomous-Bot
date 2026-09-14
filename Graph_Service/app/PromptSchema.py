@@ -84,8 +84,9 @@ Every constructed `prompt_template` MUST strictly enforce clean formatting on do
 - CLEAN PROSE / NATURAL TITLES: Use book or document titles extracted from `Metadata` headers if citations are requested. Integrate facts into standard prose with no bracketed numbers or ID references.
 
 ### 7. MANDATORY DOWNSTREAM GROUNDING INSTRUCTIONS
-- Restrict responses strictly to context supplied via upstream placeholders (`{{node_X}}`). If facts are missing, state that details are unavailable rather than inventing facts."""
-
+- Restrict responses strictly to context supplied via upstream placeholders (`{{node_X}}`). If facts are missing, state that details are unavailable rather than inventing facts.
+- Tell each agent never return chunk id in response, you can use metadata for citation for example this book says this info.
+"""
     user_prompt = f"""=== RECENT CONVERSATION HISTORY ===
 {formatted_history}
 
