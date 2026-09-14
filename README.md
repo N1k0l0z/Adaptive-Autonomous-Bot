@@ -1,3 +1,6 @@
+<video src="assets/demo.mp4" width="100%" controls loop muted></video>
+
+
 # Autonomous Multi-Agent RAG Framework
 
 An agentic Retrieval-Augmented Generation (RAG) platform built with **LangGraph**, **FastAPI**, **PostgreSQL (`pgvector`)**, and **Nginx**. The system replaces static, single-pass search pipelines with an autonomous multi-agent state graph that plans, executes, evaluates, and self-corrects until complex domain inquiries are resolved.
